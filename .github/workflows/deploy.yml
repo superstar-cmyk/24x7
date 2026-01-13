@@ -1,31 +1,37 @@
-name: Auto Restart in 1 munutes and Keep Codespace Active with Workflow Runner
+name: Auto Restart in 1 minute and Keep Codespace Active with Workflow Runner
 
 on:
-  workflow_dispatch: # Allows manual triggering of the workflow
+  workflow_dispatch: # Manual trigger only
 
 jobs:
   monitor_and_restart_codespace:
     runs-on: ubuntu-latest
+
     steps:
       - name: Install GitHub CLI and jq
         run: |
           sudo apt-get update
           sudo apt-get install -y gh jq
 
-      - name: Authenticate GitHub CLI with GitHub Token
+      - name: Authenticate GitHub CLI with Personal Access Token
+        env:
+          MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
-          echo "${{ secrets.MY_GITHUB_TOKEN }}" | gh auth login --with-token
+          echo "$MY_GITHUB_TOKEN" | gh auth login --with-token
+          gh auth status
 
       - name: Check out repository
-        uses: actions/checkout@v3  # Checkout the repository to ensure it’s available
+        uses: actions/checkout@v3
 
-      - name: Loop to Continuously Monitor Codespace and Trigger New Workflow Runner
+      - name: Monitor Codespace and Restart if Needed
         env:
           CODESPACE_NAME: ${{ secrets.MY_CODESPACE_NAME }}
         run: |
           while true; do
-            # Check the status of the Codespace
-            STATUS=$(gh codespace list --json name,state | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
+            echo "Checking Codespace status..."
+
+            STATUS=$(gh codespace list --json name,state \
+              | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
 
             if [ -z "$STATUS" ]; then
               echo "Error fetching Codespace status or Codespace does not exist."
@@ -34,28 +40,30 @@ jobs:
 
             echo "Codespace status: $STATUS"
 
-            if [ "$STATUS" == "Shutdown" ]; then
-              echo "Codespace is offline. Attempting to start it by initiating SSH connection..."
-              gh codespace ssh --codespace $CODESPACE_NAME -- echo 'Codespace started!'
-              
-              # Verify if Codespace is now available
-              STATUS_AFTER_START=$(gh codespace list --json name,state | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
-              if [ "$STATUS_AFTER_START" == "Available" ]; then
+            if [ "$STATUS" = "Shutdown" ]; then
+              echo "Codespace is offline. Attempting to start it..."
+
+              gh codespace ssh --codespace "$CODESPACE_NAME" -- echo "Codespace started"
+
+              STATUS_AFTER_START=$(gh codespace list --json name,state \
+                | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
+
+              if [ "$STATUS_AFTER_START" = "Available" ]; then
                 echo "Codespace successfully started."
               else
-                echo "Failed to start the Codespace."
+                echo "Failed to start Codespace."
                 exit 1
               fi
             else
-              echo "Codespace is active. Starting new workflow runner..."
+              echo "Codespace is active."
 
-              # Trigger a new workflow runner with the correct workflow file
-              gh workflow run deploy.yml  # <-- Update this to your workflow file name
+              echo "Triggering another workflow run..."
+              gh workflow run deploy.yml
 
-              echo "New runner started. Exiting this runner to start a new one..."
-              exit 0  # This will stop the current runner after starting the new one
+              echo "Exiting current runner."
+              exit 0
             fi
 
-            # Sleep for 1 minute before checking again
+            echo "Sleeping for 60 seconds..."
             sleep 60
           done
