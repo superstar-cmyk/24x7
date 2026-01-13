@@ -1,0 +1,61 @@
+name: Auto Restart in 1 munutes and Keep Codespace Active with Workflow Runner
+
+on:
+  workflow_dispatch: # Allows manual triggering of the workflow
+
+jobs:
+  monitor_and_restart_codespace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install GitHub CLI and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh jq
+
+      - name: Authenticate GitHub CLI with GitHub Token
+        run: |
+          echo "${{ secrets.MY_GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Check out repository
+        uses: actions/checkout@v3  # Checkout the repository to ensure it’s available
+
+      - name: Loop to Continuously Monitor Codespace and Trigger New Workflow Runner
+        env:
+          CODESPACE_NAME: ${{ secrets.MY_CODESPACE_NAME }}
+        run: |
+          while true; do
+            # Check the status of the Codespace
+            STATUS=$(gh codespace list --json name,state | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
+
+            if [ -z "$STATUS" ]; then
+              echo "Error fetching Codespace status or Codespace does not exist."
+              exit 1
+            fi
+
+            echo "Codespace status: $STATUS"
+
+            if [ "$STATUS" == "Shutdown" ]; then
+              echo "Codespace is offline. Attempting to start it by initiating SSH connection..."
+              gh codespace ssh --codespace $CODESPACE_NAME -- echo 'Codespace started!'
+              
+              # Verify if Codespace is now available
+              STATUS_AFTER_START=$(gh codespace list --json name,state | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
+              if [ "$STATUS_AFTER_START" == "Available" ]; then
+                echo "Codespace successfully started."
+              else
+                echo "Failed to start the Codespace."
+                exit 1
+              fi
+            else
+              echo "Codespace is active. Starting new workflow runner..."
+
+              # Trigger a new workflow runner with the correct workflow file
+              gh workflow run deploy.yml  # <-- Update this to your workflow file name
+
+              echo "New runner started. Exiting this runner to start a new one..."
+              exit 0  # This will stop the current runner after starting the new one
+            fi
+
+            # Sleep for 1 minute before checking again
+            sleep 60
+          done
