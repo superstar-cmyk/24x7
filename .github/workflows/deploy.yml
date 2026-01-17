@@ -1,69 +1,27 @@
-name: Auto Restart in 1 minute and Keep Codespace Active with Workflow Runner
+name: Window 10
 
-on:
-  workflow_dispatch: # Manual trigger only
+on: [push, workflow_dispatch]
 
 jobs:
-  monitor_and_restart_codespace:
-    runs-on: ubuntu-latest
+  build:
+
+    runs-on: windows-latest
+    timeout-minutes: 9999
+
 
     steps:
-      - name: Install GitHub CLI and jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gh jq
-
-      - name: Authenticate GitHub CLI with Personal Access Token
-        env:
-          MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
-        run: |
-          echo "$MY_GITHUB_TOKEN" | gh auth login --with-token
-          gh auth status
-
-      - name: Check out repository
-        uses: actions/checkout@v3
-
-      - name: Monitor Codespace and Restart if Needed
-        env:
-          CODESPACE_NAME: ${{ secrets.MY_CODESPACE_NAME }}
-        run: |
-          while true; do
-            echo "Checking Codespace status..."
-
-            STATUS=$(gh codespace list --json name,state \
-              | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
-
-            if [ -z "$STATUS" ]; then
-              echo "Error fetching Codespace status or Codespace does not exist."
-              exit 1
-            fi
-
-            echo "Codespace status: $STATUS"
-
-            if [ "$STATUS" = "Shutdown" ]; then
-              echo "Codespace is offline. Attempting to start it..."
-
-              gh codespace ssh --codespace "$CODESPACE_NAME" -- echo "Codespace started"
-
-              STATUS_AFTER_START=$(gh codespace list --json name,state \
-                | jq -r --arg name "$CODESPACE_NAME" '.[] | select(.name == $name) | .state')
-
-              if [ "$STATUS_AFTER_START" = "Available" ]; then
-                echo "Codespace successfully started."
-              else
-                echo "Failed to start Codespace."
-                exit 1
-              fi
-            else
-              echo "Codespace is active."
-
-              echo "Triggering another workflow run..."
-              gh workflow run deploy.yml
-
-              echo "Exiting current runner."
-              exit 0
-            fi
-
-            echo "Sleeping for 60 seconds..."
-            sleep 60
-          done
+    - name: Download
+      run: Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+    - name: Extract
+      run: Expand-Archive ngrok.zip
+    - name: Auth
+      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+      env:
+        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+    - name: Enable TS
+      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
+    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "@cyb3rking" -Force)
+    - name: Create Tunnel
+      run: .\ngrok\ngrok.exe tcp 3389
